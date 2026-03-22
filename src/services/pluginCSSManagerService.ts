@@ -19,9 +19,13 @@ export class PluginCSSManagerService {
   private frontendPluginAssetsPath: string
 
   constructor() {
-    // Rutas al proyecto frontend
-    this.frontendConfigPath = path.resolve(__dirname, '../../../frontend/src/config/installed-plugins.json')
-    this.frontendPluginAssetsPath = path.resolve(__dirname, '../../../frontend/src/assets/plugins')
+    this.frontendConfigPath = process.env.VERCEL || process.env.NODE_ENV === 'production'
+      ? '/tmp/installed-plugins.json'
+      : path.resolve(__dirname, '../../../frontend/src/config/installed-plugins.json')
+      
+    this.frontendPluginAssetsPath = process.env.VERCEL || process.env.NODE_ENV === 'production'
+      ? '/tmp/plugin-assets'
+      : path.resolve(__dirname, '../../../frontend/src/assets/plugins')
   }
 
   /**

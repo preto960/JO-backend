@@ -29,6 +29,7 @@ import translationRoutes from './routes/translations';
 import externalApiRoutes from './routes/externalApis';
 import { tenantRoutes } from './routes/tenants';
 import { performanceLogger } from './services/performanceLogger';
+import cronRoutes from './routes/cron';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -43,6 +44,7 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/api/cron'), // Exempt cron jobs from rate limiting
 });
 
 
@@ -171,6 +173,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/translations', translationRoutes);
 app.use('/api/external-apis', externalApiRoutes);
 app.use('/api/tenants', tenantRoutes);
+app.use('/api/cron', cronRoutes);
 
 // Note: Plugin router proxy and error handlers will be registered after plugin initialization
 

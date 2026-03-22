@@ -176,12 +176,39 @@ app.use('/api/tenants', tenantRoutes);
 
 // Initialize Pusher service (no HTTP server needed)
 
+// Helper: retry a promise-returning function with delay between attempts
+const retryWithDelay = async <T>(
+  fn: () => Promise<T>,
+  retries: number,
+  delayMs: number,
+  label: string
+): Promise<T> => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      console.warn(`⚠️ ${label} failed (attempt ${attempt}/${retries}), retrying in ${delayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error(`${label} failed after ${retries} attempts`);
+};
+
 // Initialize database and start server
 const initializeApp = async () => {
   try {
+    // Retry DB connection up to 3 times with 3s delay.
+    // Neon free tier auto-suspends and can take 3-8s to wake up.
     if (!AppDataSource.isInitialized) {
-      await AppDataSource.initialize();
+      await retryWithDelay(
+        () => AppDataSource.initialize(),
+        3,
+        3000,
+        'Database initialization'
+      );
     }
+    console.log('✅ Database connected');
 
     // Initialize settings cache
     await settingsCache.initialize();
@@ -231,15 +258,15 @@ const initializeApp = async () => {
       console.log(`🚀 Server running on port ${PORT} - Ready to go!`);
     });
   } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    // In serverless environments, don't kill the process — register error handlers anyway
+    console.error('❌ Database connection failed after all retries:', error);
+    // In local dev, crash immediately so the error is obvious.
+    // In production (serverless), keep the process alive and return 503 on each request.
     if (process.env.NODE_ENV !== 'production') {
       process.exit(1);
     } else {
-      // Let the server start; individual requests will fail with a 503 rather than crashing the lambda
       app.use(errorHandler);
-      app.use('*', (req, res) => {
-        res.status(503).json({ message: 'Service temporarily unavailable - DB connection failed' });
+      app.use('*', (_req, res) => {
+        res.status(503).json({ message: 'Service temporarily unavailable — DB connection failed' });
       });
       app.listen(PORT, () => {
         console.log(`⚠️ Server running on port ${PORT} in degraded mode (DB unavailable)`);
@@ -250,5 +277,4 @@ const initializeApp = async () => {
 
 initializeApp();
 
-
-export default app;
+export default app;

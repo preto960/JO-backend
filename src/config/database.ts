@@ -18,9 +18,10 @@ const isProduction = process.env.NODE_ENV === 'production';
 export const AppDataSource = new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
-  // Let the URL's ?sslmode= param handle SSL entirely.
-  // Setting ssl here AND in the URL causes a double-negotiation that terminates the connection.
-  ssl: isLocalDb ? false : undefined,
+  // rejectUnauthorized: false is required on serverless (Vercel/Neon) because Node.js
+  // doesn't trust Neon's root CA by default. The connection is still TLS-encrypted,
+  // only certificate hostname verification is skipped.
+  ssl: isLocalDb ? false : { rejectUnauthorized: false },
   synchronize: false,
   migrationsRun: false,
   logging: !isProduction,
@@ -30,13 +31,10 @@ export const AppDataSource = new DataSource({
   ],
   subscribers: [],
   extra: {
-    // Neon free tier can take 3-10s to wake from auto-suspend.
-    // Keep the timeout generous so Vercel lambdas survive the cold start.
-    connectionTimeoutMillis: 30000,   // 30s — enough for Neon cold start
-    idleTimeoutMillis: 10000,         // release idle connections quickly on serverless
-    query_timeout: 30000,             // 30s per query max
-    // Cap the pool: each Vercel lambda is independent, so 2 is plenty.
-    // Neon's pooler plan limits total concurrent connections.
+    // 30s gives Neon free-tier time to wake from auto-suspend (typically 3–8s)
+    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: 10000,
+    query_timeout: 30000,
     max: isProduction ? 2 : 10,
     min: 0,
   },

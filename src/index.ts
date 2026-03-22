@@ -177,70 +177,78 @@ app.use('/api/tenants', tenantRoutes);
 // Initialize Pusher service (no HTTP server needed)
 
 // Initialize database and start server
-AppDataSource.initialize()
-  .then(async () => {
-    
-    // Initialize default data (tenant, settings) - DISABLED to prevent schema conflicts
-    // await dataInitializer.initializeDefaultData();
-    // await dataInitializer.assignUsersToDefaultTenant();
-    
+const initializeApp = async () => {
+  try {
+    if (!AppDataSource.isInitialized) {
+      await AppDataSource.initialize();
+    }
+
     // Initialize settings cache
     await settingsCache.initialize();
     console.log('✅ Settings cache initialized');
-    
+
     // Register tenant resolution middleware AFTER database is initialized
     app.use(TenantResolver.middleware);
     console.log('✅ Tenant resolver middleware registered');
-    
+
     // Register Express app for dynamic route mounting
     expressAppService.setApp(app);
-    
-    // Initialize external API service
-    // const externalApiService = new ExternalApiService();
-    // await externalApiService.initializeConnections();
-    
+
     // Initialize plugin loader service
     await pluginLoaderService.initialize();
-    
+
     // Load all active plugins
     await pluginLoaderService.loadAllActivePlugins();
-    
+
     const pluginRouters = pluginLoaderService.getAllPluginRouters();
-    
+
     // Register dynamic plugin router proxy AFTER plugins are loaded
     app.use('/api/plugins/:slug', (req, res, next) => {
       const { slug } = req.params;
       const router = pluginLoaderService.getPluginRouterBySlug(slug);
-      
+
       if (!router) {
         console.error(`❌ Plugin router not found for slug: ${slug}`);
         return res.status(404).json({ message: `Plugin '${slug}' not found or not active` });
       }
-      
+
       // Remove the /api/plugins/:slug prefix and pass to plugin router
       const originalUrl = req.url;
       req.url = originalUrl.replace(`/${slug}`, '');
       if (!req.url) req.url = '/';
       if (!req.url.startsWith('/')) req.url = '/' + req.url;
-      
-      
+
       router(req, res, next);
     });
-    
-    
+
     // Register error and 404 handlers
     app.use(errorHandler);
     app.use('*', (req, res) => {
       res.status(404).json({ message: 'Route not found' });
     });
-    
+
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT} - Ready to go!`);
     });
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error('❌ Database connection failed:', error);
-    process.exit(1);
-  });
+    // In serverless environments, don't kill the process — register error handlers anyway
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    } else {
+      // Let the server start; individual requests will fail with a 503 rather than crashing the lambda
+      app.use(errorHandler);
+      app.use('*', (req, res) => {
+        res.status(503).json({ message: 'Service temporarily unavailable - DB connection failed' });
+      });
+      app.listen(PORT, () => {
+        console.log(`⚠️ Server running on port ${PORT} in degraded mode (DB unavailable)`);
+      });
+    }
+  }
+};
+
+initializeApp();
+
 
 export default app;

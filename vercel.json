@@ -18,12 +18,6 @@
       }
     }
   ],
-  "crons": [
-    {
-      "path": "/api/cron/health",
-      "schedule": "* * * * *"
-    }
-  ],
   "env": {
     "NODE_ENV": "production"
   }

@@ -12,7 +12,7 @@ dist/
 uploads/
 coverage/
 .nyc_output/
-plugins-runtime/
+
 plugins/
 
 package-lock.json

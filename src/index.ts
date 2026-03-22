@@ -46,7 +46,7 @@ const limiter = rateLimit({
 });
 
 
-app.use(
+/* app.use(
   helmet({
     crossOriginResourcePolicy: false,
   })
@@ -55,6 +55,28 @@ app.use(
 app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000'],
   credentials: true
+})); */
+
+app.options('*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Tenant-ID, X-Client-Monitor');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.status(204).end();
+});
+
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+  })
+);
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID', 'X-Client-Monitor'],
+  optionsSuccessStatus: 204
 }));
 app.use(limiter);
 app.use(express.json({ limit: '10mb' }));

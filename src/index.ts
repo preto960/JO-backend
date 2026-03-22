@@ -176,27 +176,8 @@ app.use('/api/tenants', tenantRoutes);
 
 // Initialize Pusher service (no HTTP server needed)
 
-// Initialize database and start server — with retry for Neon cold-start
-async function initializeWithRetry(retries = 3, delayMs = 5000): Promise<void> {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      console.log(`🔄 Connecting to database (attempt ${attempt}/${retries})...`);
-      await AppDataSource.initialize();
-      console.log('✅ Database connected');
-      return;
-    } catch (error) {
-      console.error(`❌ Database connection attempt ${attempt} failed:`, error);
-      if (attempt < retries) {
-        console.log(`⏳ Retrying in ${delayMs / 1000}s...`);
-        await new Promise(res => setTimeout(res, delayMs));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
-
-initializeWithRetry()
+// Initialize database and start server
+AppDataSource.initialize()
   .then(async () => {
     
     // Initialize default data (tenant, settings) - DISABLED to prevent schema conflicts
@@ -258,7 +239,7 @@ initializeWithRetry()
     });
   })
   .catch((error) => {
-    console.error('❌ Database connection failed after all retries:', error);
+    console.error('❌ Database connection failed:', error);
     process.exit(1);
   });
 

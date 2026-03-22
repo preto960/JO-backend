@@ -5,15 +5,13 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { AppDataSource } from './config/database';
+import { AppDataSource, initializeDatabase } from './config/database';
+import { ensureDbConnected } from './middleware/dbConnection';
 import { errorHandler } from './middleware/errorHandler';
 import { TenantResolver } from './middleware/tenantResolver';
 import { settingsCache } from './services/settingsCache';
-import { dataInitializer } from './services/initializeData';
-import { pusherService } from './services/pusherService';
 import { pluginLoaderService } from './services/pluginLoaderService';
 import { expressAppService } from './services/expressAppService';
-import { ExternalApiService } from './services/externalApiService';
 import { authRoutes } from './routes/auth';
 import { userRoutes } from './routes/users';
 import { installedPluginRoutes } from './routes/installedPlugins';
@@ -28,35 +26,14 @@ import dashboardRoutes from './routes/dashboard';
 import translationRoutes from './routes/translations';
 import externalApiRoutes from './routes/externalApis';
 import { tenantRoutes } from './routes/tenants';
-import { performanceLogger } from './services/performanceLogger';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const IS_VERCEL = !!process.env.VERCEL;
 
-// Trust proxy for Vercel
 app.set('trust proxy', 1);
 
-// Rate limiting - More permissive for development
-const limiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 1000, // limit each IP to 1000 requests per minute
-  message: 'Too many requests from this IP, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-
-/* app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-  })
-);
-
-app.use(cors({
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000'],
-  credentials: true
-})); */
-
+// ✅ OPTIONS preflight PRIMERO
 app.options('*', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
@@ -65,12 +42,10 @@ app.options('*', (req, res) => {
   res.status(204).end();
 });
 
-app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-    crossOriginOpenerPolicy: false,
-  })
-);
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginOpenerPolicy: false,
+}));
 
 app.use(cors({
   origin: '*',
@@ -78,85 +53,46 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID', 'X-Client-Monitor'],
   optionsSuccessStatus: 204
 }));
+
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 app.use(limiter);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Performance monitoring middleware (camuflado)
-app.use(performanceLogger.middleware());
-
-// Health check with performance metrics
+// ✅ Health check sin DB
 app.get('/health', (req, res) => {
-  const healthData = { 
-    status: 'OK', 
+  res.status(200).json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
-    service: 'AI Plugin Marketplace API',
-    version: '1.0.0'
-  };
-
-  // Agregar métricas de performance en desarrollo
-  if (process.env.NODE_ENV === 'development') {
-    (healthData as any).performance = performanceLogger.getStats();
-  }
-
-  res.status(200).json(healthData);
-});
-
-// Endpoint para heartbeats del cliente (camuflado como health POST)
-app.post('/health', (req, res) => {
-  // Verificar si es un heartbeat del cliente
-  const clientMonitorId = req.headers['x-client-monitor'];
-  
-  if (clientMonitorId && process.env.NODE_ENV === 'production') {
-    // Procesar heartbeat del cliente de forma asíncrona
-    setImmediate(() => {
-      try {
-        // Aquí podrías procesar los datos del cliente si necesitas
-        // Por ahora solo lo loggeamos en desarrollo
-        if (process.env.NODE_ENV === 'development') {
-          console.debug('Client heartbeat received:', {
-            clientId: clientMonitorId,
-            host: req.get('host'),
-            data: req.body
-          });
-        }
-      } catch (error) {
-        // Silencioso
-      }
-    });
-  }
-
-  // Responder como health check normal
-  res.status(200).json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString()
+    dbConnected: AppDataSource.isInitialized,
+    environment: IS_VERCEL ? 'vercel' : 'local'
   });
 });
 
-// Endpoint para eventos del cliente (camuflado)
-app.post('/health/events', (req, res) => {
-  const clientMonitorId = req.headers['x-client-monitor'];
-  
-  if (clientMonitorId && process.env.NODE_ENV === 'production') {
-    setImmediate(() => {
-      try {
-        // Procesar evento del cliente
-        if (process.env.NODE_ENV === 'development') {
-          console.debug('Client event received:', {
-            clientId: clientMonitorId,
-            event: req.body
-          });
-        }
-      } catch (error) {
-        // Silencioso
-      }
-    });
-  }
+// ✅ Este middleware garantiza DB conectada ANTES de cualquier ruta de API
+app.use('/api', ensureDbConnected);
 
-  res.status(200).json({ received: true });
+// ✅ Settings cache y tenant middleware lazy
+app.use('/api', async (req, res, next) => {
+  try {
+    if (!settingsCache['initialized']) {
+      await settingsCache.initialize();
+    }
+    next();
+  } catch (error) {
+    next();
+  }
 });
 
-// Routes
+app.use('/api', TenantResolver.middleware);
+
+// ✅ Rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/installed-plugins', installedPluginRoutes);
@@ -172,109 +108,52 @@ app.use('/api/translations', translationRoutes);
 app.use('/api/external-apis', externalApiRoutes);
 app.use('/api/tenants', tenantRoutes);
 
-// Note: Plugin router proxy and error handlers will be registered after plugin initialization
+// Plugin router dinámico
+app.use('/api/plugins/:slug', (req, res, next) => {
+  const { slug } = req.params;
+  const router = pluginLoaderService.getPluginRouterBySlug(slug);
 
-// Initialize Pusher service (no HTTP server needed)
+  if (!router) {
+    return res.status(404).json({ message: `Plugin '${slug}' not found or not active` });
+  }
 
-// Helper: retry a promise-returning function with delay between attempts
-const retryWithDelay = async <T>(
-  fn: () => Promise<T>,
-  retries: number,
-  delayMs: number,
-  label: string
-): Promise<T> => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
+  req.url = req.url.replace(`/${slug}`, '') || '/';
+  if (!req.url.startsWith('/')) req.url = '/' + req.url;
+
+  router(req, res, next);
+});
+
+app.use(errorHandler);
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
+});
+
+// ✅ Arranque diferente para Vercel vs local
+if (!IS_VERCEL) {
+  // Servidor tradicional: inicializar todo al arrancar
+  const startServer = async () => {
     try {
-      return await fn();
-    } catch (err) {
-      if (attempt === retries) throw err;
-      console.warn(`⚠️ ${label} failed (attempt ${attempt}/${retries}), retrying in ${delayMs}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-  }
-  throw new Error(`${label} failed after ${retries} attempts`);
-};
+      await initializeDatabase();
+      await settingsCache.initialize();
+      expressAppService.setApp(app);
+      await pluginLoaderService.initialize();
+      await pluginLoaderService.loadAllActivePlugins();
 
-// Initialize database and start server
-const initializeApp = async () => {
-  try {
-    // Retry DB connection up to 3 times with 3s delay.
-    // Neon free tier auto-suspends and can take 3-8s to wake up.
-    if (!AppDataSource.isInitialized) {
-      await retryWithDelay(
-        () => AppDataSource.initialize(),
-        3,
-        3000,
-        'Database initialization'
-      );
-    }
-    console.log('✅ Database connected');
-
-    // Initialize settings cache
-    await settingsCache.initialize();
-    console.log('✅ Settings cache initialized');
-
-    // Register tenant resolution middleware AFTER database is initialized
-    app.use(TenantResolver.middleware);
-    console.log('✅ Tenant resolver middleware registered');
-
-    // Register Express app for dynamic route mounting
-    expressAppService.setApp(app);
-
-    // Initialize plugin loader service
-    await pluginLoaderService.initialize();
-
-    // Load all active plugins
-    await pluginLoaderService.loadAllActivePlugins();
-
-    const pluginRouters = pluginLoaderService.getAllPluginRouters();
-
-    // Register dynamic plugin router proxy AFTER plugins are loaded
-    app.use('/api/plugins/:slug', (req, res, next) => {
-      const { slug } = req.params;
-      const router = pluginLoaderService.getPluginRouterBySlug(slug);
-
-      if (!router) {
-        console.error(`❌ Plugin router not found for slug: ${slug}`);
-        return res.status(404).json({ message: `Plugin '${slug}' not found or not active` });
-      }
-
-      // Remove the /api/plugins/:slug prefix and pass to plugin router
-      const originalUrl = req.url;
-      req.url = originalUrl.replace(`/${slug}`, '');
-      if (!req.url) req.url = '/';
-      if (!req.url.startsWith('/')) req.url = '/' + req.url;
-
-      router(req, res, next);
-    });
-
-    // Register error and 404 handlers
-    app.use(errorHandler);
-    app.use('*', (req, res) => {
-      res.status(404).json({ message: 'Route not found' });
-    });
-
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT} - Ready to go!`);
-    });
-  } catch (error) {
-    console.error('❌ Database connection failed after all retries:', error);
-    // In local dev, crash immediately so the error is obvious.
-    // In production (serverless), keep the process alive and return 503 on each request.
-    if (process.env.NODE_ENV !== 'production') {
-      process.exit(1);
-    } else {
-      app.use(errorHandler);
-      app.use('*', (_req, res) => {
-        res.status(503).json({ message: 'Service temporarily unavailable — DB connection failed' });
-      });
       app.listen(PORT, () => {
-        console.log(`⚠️ Server running on port ${PORT} in degraded mode (DB unavailable)`);
+        console.log(`🚀 Server running on port ${PORT}`);
       });
+    } catch (error) {
+      console.error('❌ Failed to start server:', error);
+      process.exit(1);
     }
-  }
-};
+  };
 
-initializeApp();
+  startServer();
+} else {
+  // Vercel: solo registrar el app service, el resto es lazy
+  expressAppService.setApp(app);
+  console.log('⚡ Vercel serverless mode ready');
+}
 
-export default app;
+export default app;
+module.exports = app;

@@ -17,7 +17,10 @@ export class PluginLoaderService {
   private pluginRouters: Map<string, Router> = new Map();
 
   constructor() {
-    this.pluginsDir = path.join(process.cwd(), 'plugins-runtime');
+    // En Vercel/serverless usar /tmp, en local usar plugins-runtime
+    this.pluginsDir = process.env.VERCEL || process.env.NODE_ENV === 'production'
+      ? '/tmp/plugins-runtime'
+      : path.join(process.cwd(), 'plugins-runtime');
   }
 
   /**
